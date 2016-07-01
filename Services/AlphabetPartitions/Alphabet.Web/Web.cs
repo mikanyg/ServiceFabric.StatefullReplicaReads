@@ -25,6 +25,7 @@ namespace Alphabet.WebApi
         private static readonly Uri alphabetServiceUri = new Uri(@"fabric:/AlphabetPartitions/Processing");
         private readonly ServicePartitionResolver servicePartitionResolver = ServicePartitionResolver.GetDefault();
         private readonly HttpClient httpClient = new HttpClient();
+        private readonly Random random = new Random();
 
         public Web(StatelessServiceContext context): base(context)
         {
@@ -63,6 +64,7 @@ namespace Alphabet.WebApi
             try
             {
                 string lastname = context.Request.QueryString["lastname"];
+                string operation = context.Request.QueryString["optype"];
 
                 // The partitioning scheme of the processing service is a range of integers from 0 - 25.
                 // This generates a partition key within that range by converting the first letter of the input name
@@ -77,13 +79,24 @@ namespace Alphabet.WebApi
                 // a few lines below.
                 // For a complete solution, a retry mechanism is required.
                 // For more information, see http://aka.ms/servicefabricservicecommunication
-                ResolvedServicePartition partition = await this.servicePartitionResolver.ResolveAsync(alphabetServiceUri, partitionKey, cancelRequest);
-                ResolvedServiceEndpoint ep = partition.GetEndpoint();
+                var partition = await this.servicePartitionResolver.ResolveAsync(alphabetServiceUri, partitionKey, cancelRequest);
                 
-                JObject addresses = JObject.Parse(ep.Address);
-                string primaryReplicaAddress = (string)addresses["Endpoints"].First();
+                ResolvedServiceEndpoint endpoint;
 
-                UriBuilder primaryReplicaUriBuilder = new UriBuilder(primaryReplicaAddress);
+                if (operation.Equals("write", StringComparison.InvariantCultureIgnoreCase))
+                {
+                    endpoint = partition.GetEndpoint();
+                }
+                else
+                {
+                    int index = random.Next(0, partition.Endpoints.Count);
+                    endpoint = partition.Endpoints.ToArray()[index];
+                }
+
+                JObject addresses = JObject.Parse(endpoint.Address);
+                string replicaAddress = (string)addresses["Endpoints"].First();
+
+                UriBuilder primaryReplicaUriBuilder = new UriBuilder(replicaAddress);
                 primaryReplicaUriBuilder.Query = "lastname=" + lastname;
 
                 string result = await this.httpClient.GetStringAsync(primaryReplicaUriBuilder.Uri);
@@ -95,7 +108,7 @@ namespace Alphabet.WebApi
                     firstLetterOfLastName,
                     lastname,
                     partition.Info.Id,
-                    primaryReplicaAddress);
+                    replicaAddress);
             }
             catch (Exception ex)
             {

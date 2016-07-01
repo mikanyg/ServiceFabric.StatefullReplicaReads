@@ -27,7 +27,7 @@ namespace Alphabet.Processing
 
         protected override IEnumerable<ServiceReplicaListener> CreateServiceReplicaListeners()
         {
-            return new[] { new ServiceReplicaListener(context => this.CreateInternalListener(context))};
+            return new[] { new ServiceReplicaListener(context => this.CreateInternalListener(context), listenOnSecondary:true)};
         }
 
         private ICommunicationListener CreateInternalListener(ServiceContext context)
@@ -93,14 +93,28 @@ namespace Alphabet.Processing
 
             using (ITransaction tx = this.StateManager.CreateTransaction())
             {
-                bool addResult = await dictionary.TryAddAsync(tx, user.ToUpperInvariant(), user);
+                string key = user.ToUpperInvariant();
+                string response;
+                if (this.Partition.ReadStatus == PartitionAccessStatus.NotPrimary)
+                {
+                    var val = await dictionary.TryGetValueAsync(tx, key);
 
-                await tx.CommitAsync();
+                    response = $"User {user} {(val.HasValue ? "sucessfully read" : "not found")}";
+                }
+                else if (this.Partition.WriteStatus == PartitionAccessStatus.Granted)
+                {
+                    bool addResult = await dictionary.TryAddAsync(tx, key, user);
 
-                return String.Format(
-                    "User {0} {1}",
-                    user,
-                    addResult ? "sucessfully added" : "already exists");
+                    await tx.CommitAsync();
+
+                    response = $"User {user} {(addResult ? "sucessfully added" : "already exists")}";
+                }
+                else
+                {
+                    response = "Unable to perform any read or write actions on state";
+                }
+
+                return response;
             }
         }
     }
